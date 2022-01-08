@@ -24,6 +24,7 @@
 #include <dbt.h>
 #include <xmmintrin.h>
 #include <commctrl.h>
+#pragma comment (lib, "comctl32")
 #include <hidclass.h>
 #include <hidsdi.h>
 #include <SetupAPI.h>
@@ -42,5 +43,3 @@
 #include <cmath>
 #include <chrono>
 #include <thread>
-
-

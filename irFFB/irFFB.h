@@ -21,8 +21,6 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "stdafx.h"
 #include "irsdk_defines.h"
 
-#pragma comment(linker, "/manifestdependency:\"type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='x86' publicKeyToken = '6595b64144ccf1df' language = '*'\"")
-
 #define MAX_FFB_DEVICES 16
 #define DI_MAX 10000
 #define IR_MAX 9996
@@ -53,6 +51,27 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #define EDIT_INT 0
 #define EDIT_FLOAT 1
 #define ID_TRAY_EXIT 40000
+
+#define IRSDK_VARIDX_LEN 19
+#define IDX_STEERING_WHEEL_TORQUE 0
+#define IDX_STEERING_WHEEL_TORQUE_ST 1
+#define IDX_STEERING_WHEEL_ANGLE 2
+#define IDX_STEERING_WHEEL_ANGLE_MAX 3
+#define IDX_SPEED 4
+#define IDX_THROTTLE 5
+#define IDX_RPM 6
+#define IDX_GEAR 7
+#define IDX_IS_ON_TRACK 8
+#define IDX_PLAYER_TRACK_SURFACE 9
+#define IDX_VELOCITY_X 10
+#define IDX_VELOCITY_Y 11
+#define IDX_LAT_ACCEL 12
+#define IDX_YAW_RATE 13
+#define IDX_SHOCK_DEFL_ST_RF 14
+#define IDX_SHOCK_DEFL_ST_LF 15
+#define IDX_SHOCK_DEFL_ST_LR 16
+#define IDX_SHOCK_DEFL_ST_RR 17
+#define IDX_SHOCK_DEFL_ST_CF 18
 
 #define SVCNAME L"irFFBsvc"
 #define CMDLINE_HGSVC    L"service"
@@ -163,3 +182,6 @@ inline float csignf(float a, float b) {
     return _mm_cvtss_f32(_mm_or_ps(ma, mb));
 
 }
+
+// x64 ASM
+extern "C" inline void __vectorcall x64_sum_prod(float prod, float prod_16, float prod_32, int* r);

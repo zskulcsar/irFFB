@@ -15,11 +15,14 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
+#include <shlwapi.h>
+#include <initguid.h>
+
 #include "irFFB.h"
 #include "Settings.h"
-#include "jetseat.h"
-#include "fan.h"
-#include "hidguardian.h"
+//#include "jetseat.h"
+//#include "fan.h"
+//#include "hidguardian.h"
 #include "public.h"
 #include "yaml_parser.h"
 #include "vjoyinterface.h"
@@ -52,7 +55,7 @@ CRITICAL_SECTION effectCrit;
 
 DIJOYSTATE joyState;
 DWORD axes[1] = { DIJOFS_X };
-LONG  dir[1]  = { 0 };
+LONG  dir[1] = { 0 };
 DIPERIODIC pforce;
 DIEFFECT   dieff;
 
@@ -60,9 +63,9 @@ LogiLedData logiLedData;
 DIEFFESCAPE logiEscape;
 
 Settings settings;
-JetSeat *jetseat;
-Fan *fan;
-HidGuardian *hidGuardian;
+//JetSeat *jetseat;
+//Fan *fan;
+//HidGuardian *hidGuardian;
 
 float firc6[] = {
     0.1295867f, 0.2311436f, 0.2582509f, 0.1923936f, 0.1156718f, 0.0729534f
@@ -127,43 +130,81 @@ bool onTrack = false, stopped = true, deviceChangePending = false, logiWheel = f
 volatile int ffbMag = 0;
 volatile bool nearStops = false;
 
+
 int numButtons = 0, numPov = 0, vjButtons = 0, vjPov = 0;
 UINT samples, clippedSamples;
 
 HANDLE wheelEvent = CreateEvent(nullptr, false, false, L"WheelEvent");
-HANDLE ffbEvent   = CreateEvent(nullptr, false, false, L"FFBEvent");
+HANDLE ffbEvent = CreateEvent(nullptr, false, false, L"FFBEvent");
 
 HWND mainWnd, textWnd, statusWnd;
 
 LARGE_INTEGER freq;
 
-int vjDev = 1;
+int vjDev = 1; 
 FFB_DATA ffbPacket;
 
-float *floatvarptr(const char *data, const char *name) {
+// irSDK helpers
+int irsdkVarPtrIdx[IRSDK_VARIDX_LEN] = { -1 };
+float* floatvarptr(const char* data, const char* name, int ptrIdx) {
+    //int idx = irsdkVarPtrIdx[ptrIdx];
+    //if (idx >= 0) // We already fetched the idx from irSDK
+    //{
+    //    return (float*)(data + irsdk_getVarHeaderEntry(idx)->offset);
+    //} 
+    //else // This is the first time we fetch the index
+    //{
     int idx = irsdk_varNameToIndex(name);
+    debug(L"Float idx for '%s' is set to '%d'", name, idx);
     if (idx >= 0)
-        return (float *)(data + irsdk_getVarHeaderEntry(idx)->offset);
+    {
+        irsdkVarPtrIdx[ptrIdx] = idx;
+        return (float*)(data + irsdk_getVarHeaderEntry(idx)->offset);
+    }
     else
         return nullptr;
+    //}
 }
 
-int *intvarptr(const char *data, const char *name) {
+int* intvarptr(const char* data, const char* name, int ptrIdx) {
+    //int idx = irsdkVarPtrIdx[ptrIdx];
+    //if (idx >= 0) // We already fetched the idx from irSDK
+    //{
+    //    return (int*)(data + irsdk_getVarHeaderEntry(idx)->offset);
+    //}
+    //else // This is the first time we fetch the index
+    //{
     int idx = irsdk_varNameToIndex(name);
+    debug(L"Int idx for '%s' is set to '%d'", name, idx);
     if (idx >= 0)
-        return (int *)(data + irsdk_getVarHeaderEntry(idx)->offset);
+    {
+        irsdkVarPtrIdx[ptrIdx] = idx;
+        return (int*)(data + irsdk_getVarHeaderEntry(idx)->offset);
+    }
     else
         return nullptr;
+    //}
 }
 
-bool *boolvarptr(const char *data, const char *name) {
+bool* boolvarptr(const char* data, const char* name, int ptrIdx) {
+    //int idx = irsdkVarPtrIdx[ptrIdx];
+    //if (idx >= 0) // We already fetched the idx from irSDK
+    //{
+    //    return (bool*)(data + irsdk_getVarHeaderEntry(idx)->offset);
+    //}
+    //else // This is the first time we fetch the index
+    //{
     int idx = irsdk_varNameToIndex(name);
+    debug(L"Bool idx for '%s' is set to '%d'", name, idx);
     if (idx >= 0)
-        return (bool *)(data + irsdk_getVarHeaderEntry(idx)->offset);
+    {
+        irsdkVarPtrIdx[ptrIdx] = idx;
+        return (bool*)(data + irsdk_getVarHeaderEntry(idx)->offset);
+    }
     else
         return nullptr;
+    //}
 }
-
 // Thread that reads the wheel, writes to vJoy and updates the DI effect
 DWORD WINAPI readWheelThread(LPVOID lParam) {
 
@@ -226,7 +267,7 @@ DWORD WINAPI readWheelThread(LPVOID lParam) {
 
                 QueryPerformanceCounter(&time);
 
-                if (lastTime.QuadPart != 0) {
+                if (lastTime.QuadPart != 0) { // this can be moved to the beginning so that we don't need this if (speed)
                     elapsed.QuadPart = (time.QuadPart - lastTime.QuadPart) * 1000000;
                     elapsed.QuadPart /= freq.QuadPart;
                     vel[velIdx] = (float)(joyState.lX - lastX) / elapsed.QuadPart;
@@ -333,19 +374,21 @@ DWORD WINAPI directFFBThread(LPVOID lParam) {
         if (settings.getFfbType() == FFBTYPE_DIRECT_FILTER_720) {
 
             prod[0] = s * firc12[0];
-
-            _asm {
-                movaps xmm0, xmmword ptr prod
-                movaps xmm1, xmmword ptr prod+16
-                movaps xmm2, xmmword ptr prod+32
-                addps xmm0, xmm1
-                addps xmm0, xmm2
+            //x64_sum_prod(*prod, *prod+16, *prod+32, &r);
+/*
+            _asm { // add_prod_
+                movaps xmm0, xmmword ptr prod       // 128 bit float from 'prod' to xmm0
+                movaps xmm1, xmmword ptr prod+16    // 128 bit float from 'prod+16' to xmm1
+                movaps xmm2, xmmword ptr prod+32    // 128 bit float from 'prod+32' to xmm2
+                addps xmm0, xmm1                    // adds xmm1 to xmm0
+                addps xmm0, xmm2                    // adds xmm2 to xmm1
+                                                    // https://www.felixcloutier.com/x86/addps can use like addps xmm0, xmm1, xmm2 (add is additive ... hehe)
+                haddps xmm0, xmm0                   // https://www.felixcloutier.com/x86/haddps
                 haddps xmm0, xmm0
-                haddps xmm0, xmm0
-                cvttss2si eax, xmm0
-                mov dword ptr r, eax
+                cvttss2si eax, xmm0                 // convert xmm0 to 32bit int to eax
+                mov dword ptr r, eax                // store eax in r
             }
-
+*/
             if (use360)
                 r += scaleTorque(lastSuspForce + (suspForceST[0] - lastSuspForce) / 2.0f);
 
@@ -356,8 +399,9 @@ DWORD WINAPI directFFBThread(LPVOID lParam) {
             for (int i = 1; i < DIRECT_INTERP_SAMPLES * 2 - 1; i++) {
 
                 prod[i] = s * firc12[i];
-
-                _asm {
+                x64_sum_prod(*prod, *prod + 16, *prod + 32, &r);
+                /*
+                _asm { // Exactly the same as add_prod_
                     movaps xmm0, xmmword ptr prod
                     movaps xmm1, xmmword ptr prod + 16
                     movaps xmm2, xmmword ptr prod + 32
@@ -368,6 +412,7 @@ DWORD WINAPI directFFBThread(LPVOID lParam) {
                     cvttss2si eax, xmm0
                     mov dword ptr r, eax
                 }
+                */
 
                 int idx = (i - 1) >> 1;
                 bool odd = i & 1;
@@ -393,7 +438,9 @@ DWORD WINAPI directFFBThread(LPVOID lParam) {
             }
 
             prod[DIRECT_INTERP_SAMPLES * 2 - 1] = s * firc12[DIRECT_INTERP_SAMPLES * 2 - 1];
-            _asm {
+            x64_sum_prod(*prod, *prod + 16, *prod + 32, &r);
+            /*
+            _asm { // add_prod_
                 movaps xmm0, xmmword ptr prod
                 movaps xmm1, xmmword ptr prod + 16
                 movaps xmm2, xmmword ptr prod + 32
@@ -404,6 +451,7 @@ DWORD WINAPI directFFBThread(LPVOID lParam) {
                 cvttss2si eax, xmm0
                 mov dword ptr r, eax
             }
+            */
 
             if (use360)
                 r += scaleTorque(suspForceST[DIRECT_INTERP_SAMPLES - 1]);
@@ -454,7 +502,7 @@ void resetForces() {
     suspForce = 0;
     for (int i = 0; i < DIRECT_INTERP_SAMPLES; i++) {
         suspForceST[i] = 0;
-        yawForce[i] =  0;
+        yawForce[i] = 0;
     }
     force = 0;
     setFFB(0);
@@ -536,8 +584,8 @@ void clippingReport() {
 
 }
 
-void logiRpmLed(float *rpm, float redline) {
-    
+void logiRpmLed(float* rpm, float redline) {
+
     logiLedData.rpmData.rpm = *rpm / (redline * 0.90f);
     logiLedData.rpmData.rpmFirstLed = 0.65f;
     logiLedData.rpmData.rpmRedLine = 1.0f;
@@ -605,15 +653,15 @@ int APIENTRY wWinMain(
 
     if (StrStrW(lpCmdLine, CMDLINE_HGSVC)) {
 
-        SERVICE_TABLE_ENTRYW SvcDispatchTable[] = {
-            { SVCNAME, (LPSERVICE_MAIN_FUNCTION)HidGuardian::SvcMain },
-            { NULL, NULL }
-        };
+        //SERVICE_TABLE_ENTRYW SvcDispatchTable[] = {
+        //    { SVCNAME, (LPSERVICE_MAIN_FUNCTION)HidGuardian::SvcMain },
+        //    { NULL, NULL }
+        //};
 
-        if (!StartServiceCtrlDispatcherW(SvcDispatchTable)) {
-            HidGuardian::svcReportError(L"Failed to start service ctrl dispatcher");
-            exit(1);
-        }
+        //if (!StartServiceCtrlDispatcherW(SvcDispatchTable)) {
+        //    HidGuardian::svcReportError(L"Failed to start service ctrl dispatcher");
+        //    exit(1);
+        //}
 
         exit(0);
 
@@ -696,18 +744,18 @@ int APIENTRY wWinMain(
     if (!InitInstance(hInstance, nCmdShow))
         return FALSE;
 
-    hidGuardian = HidGuardian::init(GetCurrentProcessId());
-    if (StrStrW(lpCmdLine, CMDLINE_HGINST))
-        hidGuardian->install();
-    else if (StrStrW(lpCmdLine, CMDLINE_HGREPAIR))
-        hidGuardian->repairService();
+    //hidGuardian = HidGuardian::init(GetCurrentProcessId());
+    //if (StrStrW(lpCmdLine, CMDLINE_HGINST))
+    //    hidGuardian->install();
+    //else if (StrStrW(lpCmdLine, CMDLINE_HGREPAIR))
+    //    hidGuardian->repairService();
 
-    fan = Fan::init();
-    jetseat = JetSeat::init();
-    if (!jetseat) {
+    //fan = Fan::init();
+    //jetseat = JetSeat::init();
+    //if (!jetseat) {
         DeleteMenu(GetMenu(mainWnd), ID_SETTINGS_JETSEAT, MF_BYCOMMAND);
         DrawMenuBar(mainWnd);
-    }
+    //}
 
     memset(car, 0, sizeof(car));
     setCarStatus(car);
@@ -779,28 +827,31 @@ int APIENTRY wWinMain(
             // Inform iRacing of the maxForce setting
             irsdk_broadcastMsg(irsdk_BroadcastFFBCommand, irsdk_FFBCommand_MaxForce, (float)settings.getMaxForce());
 
-            swTorque = floatvarptr(data, "SteeringWheelTorque");
-            swTorqueST = floatvarptr(data, "SteeringWheelTorque_ST");
-            steer = floatvarptr(data, "SteeringWheelAngle");
-            steerMax = floatvarptr(data, "SteeringWheelAngleMax");
-            speed = floatvarptr(data, "Speed");
-            throttle = floatvarptr(data, "Throttle");
-            rpm = floatvarptr(data, "RPM");
-            gear = intvarptr(data, "Gear");
-            isOnTrack = boolvarptr(data, "IsOnTrack");
+            // This can be optimised greatly to actually cache the returned index vs scanning the whole thing again
+            // Have an array with the idx numbers filled at the beginning of this method, here we just use the array
+            //   to iterate over the pointers
+            swTorque = floatvarptr(data, "SteeringWheelTorque", IDX_STEERING_WHEEL_TORQUE);
+            swTorqueST = floatvarptr(data, "SteeringWheelTorque_ST", IDX_STEERING_WHEEL_TORQUE_ST);
+            steer = floatvarptr(data, "SteeringWheelAngle", IDX_STEERING_WHEEL_ANGLE);
+            steerMax = floatvarptr(data, "SteeringWheelAngleMax", IDX_STEERING_WHEEL_ANGLE_MAX);
+            speed = floatvarptr(data, "Speed", IDX_SPEED);
+            throttle = floatvarptr(data, "Throttle", IDX_THROTTLE);
+            rpm = floatvarptr(data, "RPM", IDX_RPM);
+            gear = intvarptr(data, "Gear", IDX_GEAR);
+            isOnTrack = boolvarptr(data, "IsOnTrack", IDX_IS_ON_TRACK);
 
-            trackSurface = intvarptr(data, "PlayerTrackSurface");
-            vX = floatvarptr(data, "VelocityX");
-            vY = floatvarptr(data, "VelocityY");
+            trackSurface = intvarptr(data, "PlayerTrackSurface", IDX_PLAYER_TRACK_SURFACE);
+            vX = floatvarptr(data, "VelocityX", IDX_VELOCITY_X);
+            vY = floatvarptr(data, "VelocityY", IDX_VELOCITY_Y);
 
-            latAccel = floatvarptr(data, "LatAccel");
-            yawRate = floatvarptr(data, "YawRate");
+            latAccel = floatvarptr(data, "LatAccel", IDX_LAT_ACCEL);
+            yawRate = floatvarptr(data, "YawRate", IDX_YAW_RATE);
 
-            RFshockDeflST = floatvarptr(data, "RFshockDefl_ST");
-            LFshockDeflST = floatvarptr(data, "LFshockDefl_ST");
-            LRshockDeflST = floatvarptr(data, "LRshockDefl_ST");
-            RRshockDeflST = floatvarptr(data, "RRshockDefl_ST");
-            CFshockDeflST = floatvarptr(data, "CFshockDefl_ST");
+            RFshockDeflST = floatvarptr(data, "RFshockDefl_ST", IDX_SHOCK_DEFL_ST_RF);
+            LFshockDeflST = floatvarptr(data, "LFshockDefl_ST", IDX_SHOCK_DEFL_ST_LF);
+            LRshockDeflST = floatvarptr(data, "LRshockDefl_ST", IDX_SHOCK_DEFL_ST_LR);
+            RRshockDeflST = floatvarptr(data, "RRshockDefl_ST", IDX_SHOCK_DEFL_ST_RR);
+            CFshockDeflST = floatvarptr(data, "CFshockDefl_ST", IDX_SHOCK_DEFL_ST_CF);
 
             int swTorqueSTidx = irsdk_varNameToIndex("SteeringWheelTorque_ST");
             STnumSamples = irsdk_getVarHeaderEntry(swTorqueSTidx)->count;
@@ -826,7 +877,7 @@ int APIENTRY wWinMain(
                 setOnTrackStatus(onTrack);
                 lastTorque = lastSuspForce = 0.0f;
                 resetForces();
-                fan->setManualSpeed();
+                //fan->setManualSpeed();
                 clippingReport();
             }
 
@@ -846,14 +897,14 @@ int APIENTRY wWinMain(
                 lastTrackSurface = *trackSurface;
             }
 
-            if (jetseat && jetseat->isEnabled()) {
-                if (*isOnTrack && *rpm > 0.0f) {
-                    jetseat->startEngineEffect();
-                    jetseat->updateEngineEffect(*rpm * 100.0f / redline);
-                }
-                else                
-                    jetseat->stopEngineEffect();
-            }
+            //if (jetseat && jetseat->isEnabled()) {
+            //    if (*isOnTrack && *rpm > 0.0f) {
+            //        jetseat->startEngineEffect();
+            //        jetseat->updateEngineEffect(*rpm * 100.0f / redline);
+            //    }
+            //    else                
+            //        jetseat->stopEngineEffect();
+            //}
 
             if (ffdevice && logiWheel)
                 logiRpmLed(rpm, redline);
@@ -900,8 +951,8 @@ int APIENTRY wWinMain(
                         }
                     }
                     
-                    if (jetseat && jetseat->isEnabled() && asa > sopOffset)
-                        jetseat->yawEffect(sa);
+                    //if (jetseat && jetseat->isEnabled() && asa > sopOffset)
+                    //    jetseat->yawEffect(sa);
 
                     if (usCoefs != nullptr && settings.getUndersteerFactor() > 0.0f) {
 
@@ -923,18 +974,19 @@ int APIENTRY wWinMain(
 
                         if (ffbType != FFBTYPE_DIRECT_FILTER || use360) {
 
+                            /*
                             __asm {
-                                mov eax, LFshockDeflST
-                                mov ecx, RFshockDeflST
-                                movups xmm0, xmmword ptr [eax]
-                                movups xmm1, xmmword ptr [ecx]
+                                mov eax, LFshockDeflST                  // LFshockDeflST-ptr to eax
+                                mov ecx, RFshockDeflST                  // RFshockDeflST-ptr to ecx
+                                movups xmm0, xmmword ptr [eax]          // LFshockDeflST float value to xmm0
+                                movups xmm1, xmmword ptr [ecx]          // RFshockDeflST float value to xmm1
                                 // xmm2 = LFdefl[0,1,2,3]
-                                movaps xmm2, xmm0
+                                movaps xmm2, xmm0                       // LFshockDeflST to xmm2
                                 // xmm3 = RFdefl[0,1,2,3]
-                                movaps xmm3, xmm1
+                                movaps xmm3, xmm1                       // RFshockDeflST to xmm3
                                 // xmm0 = LFdefl[-,0,1,2]
-                                pslldq xmm0, 4
-                                movss xmm4, LFshockDeflLast
+                                pslldq xmm0, 4                          // shift left LFshockDeflST by 4 padding with 0
+                                movss xmm4, LFshockDeflLast             // LFshockDeflLast to xmm4 1:32
                                 // xmm1 = RFdefl[-,0,1,2]
                                 pslldq xmm1, 4
                                 movss xmm5, RFshockDeflLast
@@ -943,7 +995,7 @@ int APIENTRY wWinMain(
                                 // xmm6 = LFdefl[0,1,2,3]
                                 movaps xmm6, xmm2
                                 // xmm2 = LFdefl[0] - LFlast, LFdefl[1] - LFdefl[0], ...
-                                subps xmm2, xmm0
+                                subps xmm2, xmm0                        // subtract xmm0 from xmm2
                                 // xmm1 = RFdefl[RFlast,0,1,2]
                                 movss xmm1, xmm5
                                 // xmm7 = RFdefl[0,1,2,3]
@@ -978,6 +1030,8 @@ int APIENTRY wWinMain(
                                 movaps xmmword ptr suspForceST[0], xmm2
                                 movlps qword ptr suspForceST[16], xmm1
                             }
+
+                            */
         
                         }
                         else {
@@ -988,13 +1042,13 @@ int APIENTRY wWinMain(
                                 ) * bumpsFactor * 0.25f;
                         }
 
-                        if (jetseat && jetseat->isEnabled()) {
-                            float LFd = LFshockDeflST[STmaxIdx] - LFshockDeflLast;
-                            float RFd = RFshockDeflST[STmaxIdx] - RFshockDeflLast;
+                        //if (jetseat && jetseat->isEnabled()) {
+                        //    float LFd = LFshockDeflST[STmaxIdx] - LFshockDeflLast;
+                        //    float RFd = RFshockDeflST[STmaxIdx] - RFshockDeflLast;
 
-                            if (LFd > 0.0025f || RFd > 0.0025f)
-                                jetseat->fBumpEffect(LFd * 220.0f, RFd * 220.0f);
-                        }
+                        //    if (LFd > 0.0025f || RFd > 0.0025f)
+                        //        jetseat->fBumpEffect(LFd * 220.0f, RFd * 220.0f);
+                        //}
                         
                     }
 
@@ -1007,6 +1061,9 @@ int APIENTRY wWinMain(
                     if (CFshockDeflLast != -10000.0f) {
                     
                         if (ffbType != FFBTYPE_DIRECT_FILTER || use360)
+                        {
+                        }
+                            /*
                             __asm {
                                 mov eax, CFshockDeflST
                                 movups xmm0, xmmword ptr[eax]
@@ -1034,14 +1091,15 @@ int APIENTRY wWinMain(
                                 movaps xmmword ptr suspForceST[0], xmm2
                                 movlps qword ptr suspForceST[16], xmm1
                             }
+                            */
                         else 
                             suspForce = (CFshockDeflST[STmaxIdx] - CFshockDeflLast) * bumpsFactor * 0.25f;
 
-                        if (jetseat && jetseat->isEnabled()) {
-                            float CFd = CFshockDeflST[STmaxIdx] - CFshockDeflLast;
-                            if  (CFd > 0.0025f)
-                                jetseat->fBumpEffect(CFd * 220.0f, CFd * 220.0f);
-                        }
+                        //if (jetseat && jetseat->isEnabled()) {
+                        //    float CFd = CFshockDeflST[STmaxIdx] - CFshockDeflLast;
+                        //    if  (CFd > 0.0025f)
+                        //        jetseat->fBumpEffect(CFd * 220.0f, CFd * 220.0f);
+                        //}
 
                     }
                     
@@ -1049,16 +1107,16 @@ int APIENTRY wWinMain(
 
                 }
 
-                if (jetseat && jetseat->isEnabled() && LRshockDeflST != nullptr) {
-                    float LRd = LRshockDeflST[STmaxIdx] - LRshockDeflLast;
-                    float RRd = RRshockDeflST[STmaxIdx] - RRshockDeflLast;
+                //if (jetseat && jetseat->isEnabled() && LRshockDeflST != nullptr) {
+                //    float LRd = LRshockDeflST[STmaxIdx] - LRshockDeflLast;
+                //    float RRd = RRshockDeflST[STmaxIdx] - RRshockDeflLast;
 
-                    if (LRd > 0.0025f || RRd > 0.0025f)
-                        jetseat->rBumpEffect(LRd * 220.0f, RRd * 220.0f);
+                //    if (LRd > 0.0025f || RRd > 0.0025f)
+                //        jetseat->rBumpEffect(LRd * 220.0f, RRd * 220.0f);
 
-                    LRshockDeflLast = LRshockDeflST[STmaxIdx];
-                    RRshockDeflLast = RRshockDeflST[STmaxIdx];
-                }
+                //    LRshockDeflLast = LRshockDeflST[STmaxIdx];
+                //    RRshockDeflLast = RRshockDeflST[STmaxIdx];
+                //}
 
                 stopped = false;
 
@@ -1066,13 +1124,13 @@ int APIENTRY wWinMain(
             else
                 stopped = true;
 
-            if (*isOnTrack)
-                fan->setSpeed(*speed);
+            //if (*isOnTrack)
+            //    fan->setSpeed(*speed);
 
-            if (jetseat && jetseat->isEnabled() && *gear != lastGear) {
-                jetseat->gearEffect();
-                lastGear = *gear;
-            }
+            //if (jetseat && jetseat->isEnabled() && *gear != lastGear) {
+            //    jetseat->gearEffect();
+            //    lastGear = *gear;
+            //}
 
             for (int i = 0; i < DIRECT_INTERP_SAMPLES; i++) {
 
@@ -1202,7 +1260,7 @@ int APIENTRY wWinMain(
             onTrack = false;
             setOnTrackStatus(onTrack);
             setConnectedStatus(false);
-            fan->setManualSpeed();
+            //fan->setManualSpeed();
             timeEndPeriod(1);
             if (settings.getUseCarSpecific() && car[0] != 0) 
                 settings.writeSettingsForCar(car);
@@ -1230,6 +1288,10 @@ int APIENTRY wWinMain(
 
 }
 
+//**********************************************
+//*
+//*
+//**********************************************
 ATOM MyRegisterClass(HINSTANCE hInstance) {
 
     WNDCLASSEXW wcex;
@@ -1270,19 +1332,19 @@ LRESULT CALLBACK EditWndProc(HWND wnd, UINT msg, WPARAM wParam, LPARAM lParam, U
                     wParam == VK_RETURN ||
                     wParam == VK_DELETE ||
                     wParam == VK_BACK
+                    )
                 )
-            )
                 return 0;
 
             LRESULT ret = DefSubclassProc(wnd, msg, wParam, lParam);
 
-            wchar_t *end;
+            wchar_t* end;
             float val = 0.0f;
 
             GetWindowText(wnd, buf, 8);
             val = wcstof(buf, &end);
             if (end - buf == wcslen(buf))
-                SendMessage(GetParent(wnd), WM_EDIT_VALUE, reinterpret_cast<WPARAM &>(val), (LPARAM)wnd);
+                SendMessage(GetParent(wnd), WM_EDIT_VALUE, reinterpret_cast<WPARAM&>(val), (LPARAM)wnd);
 
             return ret;
 
@@ -1295,8 +1357,8 @@ LRESULT CALLBACK EditWndProc(HWND wnd, UINT msg, WPARAM wParam, LPARAM lParam, U
                     wParam == VK_RETURN ||
                     wParam == VK_DELETE ||
                     wParam == VK_BACK
+                    )
                 )
-            )
                 return 0;
 
             LRESULT ret = DefSubclassProc(wnd, msg, wParam, lParam);
@@ -1313,14 +1375,14 @@ LRESULT CALLBACK EditWndProc(HWND wnd, UINT msg, WPARAM wParam, LPARAM lParam, U
 
 }
 
-HWND combo(HWND parent, wchar_t *name, int x, int y) {
+HWND combo(HWND parent, wchar_t* name, int x, int y) {
 
     CreateWindowW(
         L"STATIC", name,
         WS_CHILD | WS_VISIBLE,
         x, y, 300, 20, parent, NULL, hInst, NULL
     );
-    return 
+    return
         CreateWindow(
             L"COMBOBOX", nullptr,
             CBS_DROPDOWNLIST | WS_CHILD | WS_VISIBLE | WS_OVERLAPPED | WS_TABSTOP,
@@ -1329,9 +1391,9 @@ HWND combo(HWND parent, wchar_t *name, int x, int y) {
 
 }
 
-sWins_t *slider(HWND parent, wchar_t *name, int x, int y, wchar_t *start, wchar_t *end, bool floatData) {
+sWins_t* slider(HWND parent, wchar_t* name, int x, int y, wchar_t* start, wchar_t* end, bool floatData) {
 
-    sWins_t *wins = (sWins_t *)malloc(sizeof(sWins_t));
+    sWins_t* wins = (sWins_t*)malloc(sizeof(sWins_t));
 
     wins->label = CreateWindowW(
         L"STATIC", name,
@@ -1340,7 +1402,7 @@ sWins_t *slider(HWND parent, wchar_t *name, int x, int y, wchar_t *start, wchar_
     );
 
     wins->value = CreateWindowW(
-        L"EDIT", L"", 
+        L"EDIT", L"",
         WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_CENTER,
         x + 210, y, 50, 20, parent, NULL, hInst, NULL
     );
@@ -1374,9 +1436,9 @@ sWins_t *slider(HWND parent, wchar_t *name, int x, int y, wchar_t *start, wchar_
 
 }
 
-HWND checkbox(HWND parent, wchar_t *name, int x, int y) {
+HWND checkbox(HWND parent, wchar_t* name, int x, int y) {
 
-    return 
+    return
         CreateWindowEx(
             0, L"BUTTON", name,
             BS_CHECKBOX | BS_MULTILINE | WS_CHILD | WS_TABSTOP | WS_VISIBLE,
@@ -1384,7 +1446,6 @@ HWND checkbox(HWND parent, wchar_t *name, int x, int y) {
         );
 
 }
-
 BOOL InitInstance(HINSTANCE hInstance, int nCmdShow) {
 
     DEV_BROADCAST_DEVICEINTERFACE devFilter;
@@ -1400,7 +1461,7 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow) {
 
     if (!mainWnd)
         return FALSE;
-    
+
     memset(&niData, 0, sizeof(niData));
     niData.uVersion = NOTIFYICON_VERSION;
     niData.cbSize = NOTIFYICONDATA_V1_SIZE;
@@ -1422,7 +1483,7 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow) {
     settings.setSopOffsetWnd(slider(mainWnd, L"SoP offset:", 464, 280, L"0", L"100", true));
     settings.setUse360Wnd(
         checkbox(
-            mainWnd, 
+            mainWnd,
             L" Use 360 Hz telemetry for suspension effects\r\n in direct modes?",
             460, 340
         )
@@ -1451,7 +1512,7 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow) {
         0, 0, 0, 0, mainWnd, NULL, hInst, NULL
     );
     SendMessage(statusWnd, SB_SETPARTS, 3, LPARAM(statusParts));
-    
+
     textWnd = CreateWindowEx(
         WS_EX_CLIENTEDGE, L"EDIT", L"",
         WS_VISIBLE | WS_VSCROLL | WS_CHILD | ES_LEFT | ES_MULTILINE | ES_AUTOVSCROLL,
@@ -1479,219 +1540,219 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
 
     switch (message) {
 
-        case WM_COMMAND: {
+    case WM_COMMAND: {
 
-            int wmId = LOWORD(wParam);
-            switch (wmId) {
+        int wmId = LOWORD(wParam);
+        switch (wmId) {
 
-                case IDM_ABOUT:
-                    DialogBox(hInst, MAKEINTRESOURCE(IDD_ABOUTBOX), hWnd, About);
-                    break;
-                case IDM_EXIT:
-                    DestroyWindow(hWnd);
-                    break;
-                case ID_SETTINGS_JETSEAT:
-                    if (jetseat)
-                        jetseat->createWindow(hInst);
-                    break;
-                case ID_SETTINGS_FAN:
-                    fan->createWindow(hInst);
-                    break;
-                case ID_SETTINGS_HIDGUARDIAN:
-                    hidGuardian->createWindow(hInst);
-                default:
-                    if (HIWORD(wParam) == CBN_SELCHANGE) {
-                        if (wnd == settings.getDevWnd()) {
-                            GUID oldDevice = settings.getFfbDevice();
-                            DWORD vidpid = 0;  
-                            if (oldDevice != GUID_NULL)
-                                vidpid = getDeviceVidPid(ffdevice); 
-                            settings.setFfbDevice(SendMessage((HWND)lParam, CB_GETCURSEL, 0, 0));
-                            if (vidpid != 0 && oldDevice != settings.getFfbDevice())
-                                hidGuardian->removeDevice(LOWORD(vidpid), HIWORD(vidpid), false);
-                        }
-                        else if (wnd == settings.getFfbWnd())
-                            settings.setFfbType(SendMessage((HWND)lParam, CB_GETCURSEL, 0, 0));
-                    }
-                    else if (HIWORD(wParam) == BN_CLICKED) {
-                        bool oldValue = SendMessage((HWND)lParam, BM_GETCHECK, 0, 0) == BST_CHECKED;
-                        if (wnd == settings.getUse360Wnd())
-                            settings.setUse360ForDirect(!oldValue);
-                        else if (wnd == settings.getCarSpecificWnd()) {
-                            if (!oldValue)
-                                getCarName();
-                            settings.setUseCarSpecific(!oldValue, car);
-                        }
-                        else if (wnd == settings.getReduceWhenParkedWnd())
-                            settings.setReduceWhenParked(!oldValue);
-                        else if (wnd == settings.getRunOnStartupWnd())
-                            settings.setRunOnStartup(!oldValue);
-                        else if (wnd == settings.getStartMinimisedWnd())
-                            settings.setStartMinimised(!oldValue);
-                        else if (wnd == settings.getDebugWnd()) {
-                            settings.setDebug(!oldValue);
-                            if (settings.getDebug()) {
-                                debugHnd = CreateFileW(settings.getLogPath(), GENERIC_WRITE, FILE_SHARE_READ, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-                                int chars = SendMessageW(textWnd, WM_GETTEXTLENGTH, 0, 0);
-                                wchar_t *buf = new wchar_t[chars + 1], *str = buf;
-                                SendMessageW(textWnd, WM_GETTEXT, chars + 1, (LPARAM)buf);
-                                wchar_t *end = StrStrW(str, L"\r\n");
-                                while (end) {                                    
-                                    *end = '\0';
-                                    debug(str);
-                                    str = end + 2;
-                                    end = StrStrW(str, L"\r\n");
-                                }
-                                delete[] buf;
-                            }
-                            else if (debugHnd != INVALID_HANDLE_VALUE) {
-                                CloseHandle(debugHnd);
-                                debugHnd = INVALID_HANDLE_VALUE;
-                            }
-                        }
-                    }
-                    return DefWindowProc(hWnd, message, wParam, lParam);
+        case IDM_ABOUT:
+            DialogBox(hInst, MAKEINTRESOURCE(IDD_ABOUTBOX), hWnd, About);
+            break;
+        case IDM_EXIT:
+            DestroyWindow(hWnd);
+            break;
+            //case ID_SETTINGS_JETSEAT:
+            //    if (jetseat)
+            //        jetseat->createWindow(hInst);
+            //    break;
+            //case ID_SETTINGS_FAN:
+            //    fan->createWindow(hInst);
+            //    break;
+            //case ID_SETTINGS_HIDGUARDIAN:
+            //    hidGuardian->createWindow(hInst);
+        default:
+            if (HIWORD(wParam) == CBN_SELCHANGE) {
+                if (wnd == settings.getDevWnd()) {
+                    GUID oldDevice = settings.getFfbDevice();
+                    DWORD vidpid = 0;
+                    if (oldDevice != GUID_NULL)
+                        vidpid = getDeviceVidPid(ffdevice);
+                    settings.setFfbDevice(SendMessage((HWND)lParam, CB_GETCURSEL, 0, 0));
+                    //if (vidpid != 0 && oldDevice != settings.getFfbDevice())
+                    //    hidGuardian->removeDevice(LOWORD(vidpid), HIWORD(vidpid), false);
+                }
+                else if (wnd == settings.getFfbWnd())
+                    settings.setFfbType(SendMessage((HWND)lParam, CB_GETCURSEL, 0, 0));
             }
-        }
-        break;
-
-        case WM_EDIT_VALUE: {
-            if (wnd == settings.getMaxWnd()->value)
-                settings.setMaxForce(wParam, wnd);
-            else if (wnd == settings.getMinWnd()->value)
-                settings.setMinForce(wParam, wnd);
-            else if (wnd == settings.getBumpsWnd()->value)
-                settings.setBumpsFactor(reinterpret_cast<float &>(wParam), wnd);
-            else if (wnd == settings.getDampingWnd()->value)
-                settings.setDampingFactor(reinterpret_cast<float &>(wParam), wnd);
-            else if (wnd == settings.getSopWnd()->value)
-                settings.setSopFactor(reinterpret_cast<float &>(wParam), wnd);
-            else if (wnd == settings.getSopOffsetWnd()->value)
-                settings.setSopOffset(reinterpret_cast<float &>(wParam), wnd);
-        }
-        break;
-             
-
-        case WM_HSCROLL: {
-            if (wnd == settings.getMaxWnd()->trackbar)
-                settings.setMaxForce(SendMessage(wnd, TBM_GETPOS, 0, 0), wnd);
-            else if (wnd == settings.getMinWnd()->trackbar)
-                settings.setMinForce(SendMessage(wnd, TBM_GETPOS, 0, 0), wnd);
-            else if (wnd == settings.getBumpsWnd()->trackbar)
-                settings.setBumpsFactor((float)SendMessage(wnd, TBM_GETPOS, 0, 0), wnd);
-            else if (wnd == settings.getDampingWnd()->trackbar)
-                settings.setDampingFactor((float)SendMessage(wnd, TBM_GETPOS, 0, 0), wnd);
-            else if (wnd == settings.getSopWnd()->trackbar)
-                settings.setSopFactor((float)SendMessage(wnd, TBM_GETPOS, 0, 0), wnd);
-            else if (wnd == settings.getSopOffsetWnd()->trackbar)
-                settings.setSopOffset((float)SendMessage(wnd, TBM_GETPOS, 0, 0), wnd);
-            else if (wnd == settings.getUndersteerWnd()->trackbar)
-                settings.setUndersteerFactor((float)SendMessage(wnd, TBM_GETPOS, 0, 0), wnd);
-            else if (wnd == settings.getUndersteerOffsetWnd()->trackbar)
-                settings.setUndersteerOffset((float)SendMessage(wnd, TBM_GETPOS, 0, 0), wnd);
-        }
-        break;
-
-        case WM_CTLCOLORSTATIC: {
-            SetBkColor((HDC)wParam, RGB(0xff, 0xff, 0xff));
-            return (LRESULT)CreateSolidBrush(RGB(0xff, 0xff, 0xff));
-        }
-        break;
-
-        case WM_PRINTCLIENT: {
-            RECT r = { 0 };
-            GetClientRect(hWnd, &r);
-            FillRect((HDC)wParam, &r, CreateSolidBrush(RGB(0xff, 0xff, 0xff)));
-        }
-        break;
-
-        case WM_SIZE: {
-            SendMessage(statusWnd, WM_SIZE, wParam, lParam);
+            else if (HIWORD(wParam) == BN_CLICKED) {
+                bool oldValue = SendMessage((HWND)lParam, BM_GETCHECK, 0, 0) == BST_CHECKED;
+                if (wnd == settings.getUse360Wnd())
+                    settings.setUse360ForDirect(!oldValue);
+                else if (wnd == settings.getCarSpecificWnd()) {
+                    if (!oldValue)
+                        getCarName();
+                    settings.setUseCarSpecific(!oldValue, car);
+                }
+                else if (wnd == settings.getReduceWhenParkedWnd())
+                    settings.setReduceWhenParked(!oldValue);
+                else if (wnd == settings.getRunOnStartupWnd())
+                    settings.setRunOnStartup(!oldValue);
+                else if (wnd == settings.getStartMinimisedWnd())
+                    settings.setStartMinimised(!oldValue);
+                else if (wnd == settings.getDebugWnd()) {
+                    settings.setDebug(!oldValue);
+                    if (settings.getDebug()) {
+                        debugHnd = CreateFileW(settings.getLogPath(), GENERIC_WRITE, FILE_SHARE_READ, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+                        int chars = SendMessageW(textWnd, WM_GETTEXTLENGTH, 0, 0);
+                        wchar_t* buf = new wchar_t[chars + 1], * str = buf;
+                        SendMessageW(textWnd, WM_GETTEXT, chars + 1, (LPARAM)buf);
+                        wchar_t* end = StrStrW(str, L"\r\n");
+                        while (end) {
+                            *end = '\0';
+                            debug(str);
+                            str = end + 2;
+                            end = StrStrW(str, L"\r\n");
+                        }
+                        delete[] buf;
+                    }
+                    else if (debugHnd != INVALID_HANDLE_VALUE) {
+                        CloseHandle(debugHnd);
+                        debugHnd = INVALID_HANDLE_VALUE;
+                    }
+                }
+            }
             return DefWindowProc(hWnd, message, wParam, lParam);
         }
-        break;
+    }
+                   break;
 
-        case WM_POWERBROADCAST: {
-            int wmId = LOWORD(wParam);
-            switch (wmId) {
-                case PBT_APMSUSPEND:
-                    debug(L"Computer is suspending, release all");
-                    releaseAll();
+    case WM_EDIT_VALUE: {
+        if (wnd == settings.getMaxWnd()->value)
+            settings.setMaxForce(wParam, wnd);
+        else if (wnd == settings.getMinWnd()->value)
+            settings.setMinForce(wParam, wnd);
+        else if (wnd == settings.getBumpsWnd()->value)
+            settings.setBumpsFactor(reinterpret_cast<float&>(wParam), wnd);
+        else if (wnd == settings.getDampingWnd()->value)
+            settings.setDampingFactor(reinterpret_cast<float&>(wParam), wnd);
+        else if (wnd == settings.getSopWnd()->value)
+            settings.setSopFactor(reinterpret_cast<float&>(wParam), wnd);
+        else if (wnd == settings.getSopOffsetWnd()->value)
+            settings.setSopOffset(reinterpret_cast<float&>(wParam), wnd);
+    }
+                      break;
+
+
+    case WM_HSCROLL: {
+        if (wnd == settings.getMaxWnd()->trackbar)
+            settings.setMaxForce(SendMessage(wnd, TBM_GETPOS, 0, 0), wnd);
+        else if (wnd == settings.getMinWnd()->trackbar)
+            settings.setMinForce(SendMessage(wnd, TBM_GETPOS, 0, 0), wnd);
+        else if (wnd == settings.getBumpsWnd()->trackbar)
+            settings.setBumpsFactor((float)SendMessage(wnd, TBM_GETPOS, 0, 0), wnd);
+        else if (wnd == settings.getDampingWnd()->trackbar)
+            settings.setDampingFactor((float)SendMessage(wnd, TBM_GETPOS, 0, 0), wnd);
+        else if (wnd == settings.getSopWnd()->trackbar)
+            settings.setSopFactor((float)SendMessage(wnd, TBM_GETPOS, 0, 0), wnd);
+        else if (wnd == settings.getSopOffsetWnd()->trackbar)
+            settings.setSopOffset((float)SendMessage(wnd, TBM_GETPOS, 0, 0), wnd);
+        else if (wnd == settings.getUndersteerWnd()->trackbar)
+            settings.setUndersteerFactor((float)SendMessage(wnd, TBM_GETPOS, 0, 0), wnd);
+        else if (wnd == settings.getUndersteerOffsetWnd()->trackbar)
+            settings.setUndersteerOffset((float)SendMessage(wnd, TBM_GETPOS, 0, 0), wnd);
+    }
+                   break;
+
+    case WM_CTLCOLORSTATIC: {
+        SetBkColor((HDC)wParam, RGB(0xff, 0xff, 0xff));
+        return (LRESULT)CreateSolidBrush(RGB(0xff, 0xff, 0xff));
+    }
+                          break;
+
+    case WM_PRINTCLIENT: {
+        RECT r = { 0 };
+        GetClientRect(hWnd, &r);
+        FillRect((HDC)wParam, &r, CreateSolidBrush(RGB(0xff, 0xff, 0xff)));
+    }
+                       break;
+
+    case WM_SIZE: {
+        SendMessage(statusWnd, WM_SIZE, wParam, lParam);
+        return DefWindowProc(hWnd, message, wParam, lParam);
+    }
                 break;
-                case PBT_APMRESUMESUSPEND:
-                    debug(L"Computer is resuming, init all");
-                    initAll();
-                break;
-            }
-        }
-        break;
 
-        case WM_TRAY_ICON: {
-            switch (lParam) {
-                case WM_LBUTTONUP:
-                    restore();
-                    break;
-                case WM_RBUTTONUP: {
-                    HMENU trayMenu = CreatePopupMenu();
-                    POINT curPoint;
-                    AppendMenuW(trayMenu, MF_STRING, ID_TRAY_EXIT, L"Exit");
-                    GetCursorPos(&curPoint);
-                    SetForegroundWindow(hWnd);
-                    if (
-                        TrackPopupMenu(
-                            trayMenu, TPM_RETURNCMD | TPM_NONOTIFY,
-                            curPoint.x, curPoint.y, 0, hWnd, NULL
-                        ) == ID_TRAY_EXIT
-                    )
-                        PostQuitMessage(0);
-                    DestroyMenu(trayMenu);
-                }
-                break;
-            }
-                    
-        }
-        break;
-
-        case WM_DEVICECHANGE: {
-            DEV_BROADCAST_HDR *hdr = (DEV_BROADCAST_HDR *)lParam;
-            if (wParam != DBT_DEVICEARRIVAL && wParam != DBT_DEVICEREMOVECOMPLETE)
-                return 0;
-            if (hdr->dbch_devicetype != DBT_DEVTYP_DEVICEINTERFACE)
-                return 0;
-            deviceChange();
-        }
-        break;
-
-        case WM_SYSCOMMAND: {
-            switch (wParam & 0xfff0) {
-                case SC_MINIMIZE:
-                    minimise();
-                    return 0;
-                default:
-                    return DefWindowProc(hWnd, message, wParam, lParam);
-            }
-        }
-        break;
-
-        case WM_DESTROY: {
-            debug(L"Exiting");
-            Shell_NotifyIcon(NIM_DELETE, &niData);
+    case WM_POWERBROADCAST: {
+        int wmId = LOWORD(wParam);
+        switch (wmId) {
+        case PBT_APMSUSPEND:
+            debug(L"Computer is suspending, release all");
             releaseAll();
-            if (settings.getUseCarSpecific() && car[0] != 0)
-                settings.writeSettingsForCar(car);
-            else
-                settings.writeGenericSettings();
-            settings.writeRegSettings();
-            hidGuardian->stop(GetCurrentProcessId());
-            if (debugHnd != INVALID_HANDLE_VALUE)
-                CloseHandle(debugHnd);
-            CloseHandle(globalMutex);
-            exit(0);
+            break;
+        case PBT_APMRESUMESUSPEND:
+            debug(L"Computer is resuming, init all");
+            initAll();
+            break;
         }
-        break;
+    }
+                          break;
 
+    case WM_TRAY_ICON: {
+        switch (lParam) {
+        case WM_LBUTTONUP:
+            restore();
+            break;
+        case WM_RBUTTONUP: {
+            HMENU trayMenu = CreatePopupMenu();
+            POINT curPoint;
+            AppendMenuW(trayMenu, MF_STRING, ID_TRAY_EXIT, L"Exit");
+            GetCursorPos(&curPoint);
+            SetForegroundWindow(hWnd);
+            if (
+                TrackPopupMenu(
+                    trayMenu, TPM_RETURNCMD | TPM_NONOTIFY,
+                    curPoint.x, curPoint.y, 0, hWnd, NULL
+                ) == ID_TRAY_EXIT
+                )
+                PostQuitMessage(0);
+            DestroyMenu(trayMenu);
+        }
+                         break;
+        }
+
+    }
+                     break;
+
+    case WM_DEVICECHANGE: {
+        DEV_BROADCAST_HDR* hdr = (DEV_BROADCAST_HDR*)lParam;
+        if (wParam != DBT_DEVICEARRIVAL && wParam != DBT_DEVICEREMOVECOMPLETE)
+            return 0;
+        if (hdr->dbch_devicetype != DBT_DEVTYP_DEVICEINTERFACE)
+            return 0;
+        deviceChange();
+    }
+                        break;
+
+    case WM_SYSCOMMAND: {
+        switch (wParam & 0xfff0) {
+        case SC_MINIMIZE:
+            minimise();
+            return 0;
         default:
             return DefWindowProc(hWnd, message, wParam, lParam);
+        }
+    }
+                      break;
+
+    case WM_DESTROY: {
+        debug(L"Exiting");
+        Shell_NotifyIcon(NIM_DELETE, &niData);
+        releaseAll();
+        if (settings.getUseCarSpecific() && car[0] != 0)
+            settings.writeSettingsForCar(car);
+        else
+            settings.writeGenericSettings();
+        settings.writeRegSettings();
+        //hidGuardian->stop(GetCurrentProcessId());
+        if (debugHnd != INVALID_HANDLE_VALUE)
+            CloseHandle(debugHnd);
+        CloseHandle(globalMutex);
+        exit(0);
+    }
+                   break;
+
+    default:
+        return DefWindowProc(hWnd, message, wParam, lParam);
     }
 
     return 0;
@@ -1703,14 +1764,14 @@ INT_PTR CALLBACK About(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam) {
 
     switch (message) {
 
-        case WM_INITDIALOG:
-            return (INT_PTR)TRUE;
+    case WM_INITDIALOG:
+        return (INT_PTR)TRUE;
 
-        case WM_COMMAND:
-            if (LOWORD(wParam) == IDOK || LOWORD(wParam) == IDCANCEL) {
-                EndDialog(hDlg, LOWORD(wParam));
-                return (INT_PTR)TRUE;
-            }
+    case WM_COMMAND:
+        if (LOWORD(wParam) == IDOK || LOWORD(wParam) == IDCANCEL) {
+            EndDialog(hDlg, LOWORD(wParam));
+            return (INT_PTR)TRUE;
+        }
         break;
     }
 
@@ -1718,7 +1779,7 @@ INT_PTR CALLBACK About(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam) {
 
 }
 
-void text(wchar_t *fmt, ...) {
+void text(wchar_t* fmt, ...) {
 
     va_list argp;
     wchar_t msg[512];
@@ -1737,21 +1798,21 @@ void text(wchar_t *fmt, ...) {
 
 }
 
-void text(wchar_t *fmt, char *charstr) {
+void text(wchar_t* fmt, char* charstr) {
 
     int len = strlen(charstr) + 1;
-    wchar_t *wstr = new wchar_t[len];
+    wchar_t* wstr = new wchar_t[len];
     mbstowcs_s(nullptr, wstr, len, charstr, len);
     text(fmt, wstr);
     delete[] wstr;
 
 }
 
-void debug(wchar_t *msg) {
+void debug(wchar_t* msg) {
 
     if (!settings.getDebug())
         return;
-    
+
     DWORD written;
     wchar_t buf[512];
     SYSTEMTIME lt;
@@ -1782,7 +1843,7 @@ void debug(wchar_t *msg) {
 }
 
 template <typename... T>
-void debug(wchar_t *fmt, T... args) {
+void debug(wchar_t* fmt, T... args) {
 
     if (!settings.getDebug())
         return;
@@ -1793,7 +1854,7 @@ void debug(wchar_t *fmt, T... args) {
 
 }
 
-void setCarStatus(char *carStr) {
+void setCarStatus(char* carStr) {
 
     if (!carStr || carStr[0] == 0) {
         SendMessage(statusWnd, SB_SETTEXT, STATUS_CAR_PART, LPARAM(L"Car: generic"));
@@ -1801,7 +1862,7 @@ void setCarStatus(char *carStr) {
     }
 
     int len = strlen(carStr) + 1;
-    wchar_t *wstr = new wchar_t[len + 5];
+    wchar_t* wstr = new wchar_t[len + 5];
     lstrcpy(wstr, L"Car: ");
     mbstowcs_s(nullptr, wstr + 5, len, carStr, len);
     SendMessage(statusWnd, SB_SETTEXT, STATUS_CAR_PART, LPARAM(wstr));
@@ -1848,7 +1909,7 @@ void setLogiWheelRange(WORD prodId) {
         }
 
         SP_DEVICE_INTERFACE_DATA intfData;
-        SP_DEVICE_INTERFACE_DETAIL_DATA *intfDetail;
+        SP_DEVICE_INTERFACE_DETAIL_DATA* intfDetail;
         DWORD idx = 0;
         DWORD error = 0;
         DWORD size;
@@ -1869,7 +1930,7 @@ void setLogiWheelRange(WORD prodId) {
                     continue;
                 }
 
-            intfDetail = (SP_DEVICE_INTERFACE_DETAIL_DATA *)malloc(size);
+            intfDetail = (SP_DEVICE_INTERFACE_DETAIL_DATA*)malloc(size);
             intfDetail->cbSize = sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA);
 
             if (!SetupDiGetDeviceInterfaceDetailW(devInfoSet, &intfData, intfDetail, size, NULL, NULL)) {
@@ -1878,10 +1939,10 @@ void setLogiWheelRange(WORD prodId) {
             }
 
             if (
-                wcsstr(intfDetail->DevicePath, G25PATH)  != NULL ||
+                wcsstr(intfDetail->DevicePath, G25PATH) != NULL ||
                 wcsstr(intfDetail->DevicePath, DFGTPATH) != NULL ||
                 wcsstr(intfDetail->DevicePath, G27PATH) != NULL
-            ) {
+                ) {
 
                 HANDLE file = CreateFileW(
                     intfDetail->DevicePath,
@@ -1944,7 +2005,7 @@ void setLogiWheelRange(WORD prodId) {
 
 }
 
-BOOL CALLBACK EnumFFDevicesCallback(LPCDIDEVICEINSTANCE diDevInst, VOID *wnd) {
+BOOL CALLBACK EnumFFDevicesCallback(LPCDIDEVICEINSTANCE diDevInst, VOID* wnd) {
 
     UNREFERENCED_PARAMETER(wnd);
 
@@ -1958,11 +2019,11 @@ BOOL CALLBACK EnumFFDevicesCallback(LPCDIDEVICEINSTANCE diDevInst, VOID *wnd) {
 
 }
 
-BOOL CALLBACK EnumObjectCallback(const LPCDIDEVICEOBJECTINSTANCE inst, VOID *dw) {
+BOOL CALLBACK EnumObjectCallback(const LPCDIDEVICEOBJECTINSTANCE inst, VOID* dw) {
 
     UNREFERENCED_PARAMETER(inst);
 
-    (*(int *)dw)++;
+    (*(int*)dw)++;
     return DIENUM_CONTINUE;
 
 }
@@ -1975,10 +2036,10 @@ void enumDirectInput() {
         FAILED(
             DirectInput8Create(
                 GetModuleHandle(nullptr), DIRECTINPUT_VERSION, IID_IDirectInput8,
-                (VOID **)&pDI, nullptr
+                (VOID**)&pDI, nullptr
             )
         )
-    ) {
+        ) {
         text(L"Failed to initialise DirectInput");
         return;
     }
@@ -1987,7 +2048,6 @@ void enumDirectInput() {
         DI8DEVCLASS_GAMECTRL, EnumFFDevicesCallback, settings.getDevWnd(),
         DIEDFL_ATTACHEDONLY | DIEDFL_FORCEFEEDBACK
     );
-
 }
 
 void initDirectInput() {
@@ -2007,10 +2067,10 @@ void initDirectInput() {
         FAILED(
             DirectInput8Create(
                 GetModuleHandle(nullptr), DIRECTINPUT_VERSION, IID_IDirectInput8,
-                (VOID **)&pDI, nullptr
+                (VOID**)&pDI, nullptr
             )
         )
-    ) {
+        ) {
         text(L"Failed to initialise DirectInput");
         return;
     }
@@ -2034,12 +2094,12 @@ void initDirectInput() {
         return;
     }
 
-    if (FAILED(ffdevice->EnumObjects(EnumObjectCallback, (VOID *)&numButtons, DIDFT_BUTTON))) {
+    if (FAILED(ffdevice->EnumObjects(EnumObjectCallback, (VOID*)&numButtons, DIDFT_BUTTON))) {
         text(L"Failed to enumerate DI device buttons");
         return;
     }
 
-    if (FAILED(ffdevice->EnumObjects(EnumObjectCallback, (VOID *)&numPov, DIDFT_POV))) {
+    if (FAILED(ffdevice->EnumObjects(EnumObjectCallback, (VOID*)&numPov, DIDFT_POV))) {
         text(L"Failed to enumerate DI device povs");
         return;
     }
@@ -2084,8 +2144,8 @@ void initDirectInput() {
 
     LeaveCriticalSection(&effectCrit);
 
-    if (vidpid != 0)
-        hidGuardian->setDevice(LOWORD(vidpid), HIWORD(vidpid));
+    //if (vidpid != 0)
+    //    hidGuardian->setDevice(LOWORD(vidpid), HIWORD(vidpid));
 
 }
 
@@ -2148,7 +2208,7 @@ inline void sleepSpinUntil(PLARGE_INTEGER base, UINT sleep, UINT offset) {
 
     std::this_thread::sleep_for(std::chrono::microseconds(sleep));
     do {
-        _asm { pause };
+        _mm_pause();
         QueryPerformanceCounter(&time);
     } while (time.QuadPart < until);
 
@@ -2190,6 +2250,7 @@ inline void setFFB(int mag) {
 
 }
 
+// vJoy
 bool initVJD() {
 
     WORD verDrv;
@@ -2222,18 +2283,18 @@ bool initVJD() {
             goto NEXT;
         if (
             !IsDeviceFfbEffect(vjDev, HID_USAGE_CONST) ||
-            !IsDeviceFfbEffect(vjDev, HID_USAGE_SINE)  ||
-            !IsDeviceFfbEffect(vjDev, HID_USAGE_DMPR)  ||
-            !IsDeviceFfbEffect(vjDev, HID_USAGE_FRIC)  ||
+            !IsDeviceFfbEffect(vjDev, HID_USAGE_SINE) ||
+            !IsDeviceFfbEffect(vjDev, HID_USAGE_DMPR) ||
+            !IsDeviceFfbEffect(vjDev, HID_USAGE_FRIC) ||
             !IsDeviceFfbEffect(vjDev, HID_USAGE_SPRNG)
-        ) {
+            ) {
             text(L"vjDev %d: Not all required FFB effects are enabled", vjDev);
             text(L"Enable all FFB effects to use this device");
             goto NEXT;
         }
         break;
 
-NEXT:
+    NEXT:
         vjDev++;
 
     }
@@ -2244,7 +2305,7 @@ NEXT:
         return false;
     }
 
-    memset(&ffbPacket, 0 ,sizeof(ffbPacket));
+    memset(&ffbPacket, 0, sizeof(ffbPacket));
 
     if (vjdStatus == VJD_STAT_OWN) {
         RelinquishVJD(vjDev);
@@ -2271,23 +2332,22 @@ NEXT:
     return true;
 
 }
+//**********************************************
+//*
+//*
+//**********************************************
 
 void initAll() {
-
     initVJD();
     initDirectInput();
-
 }
 
 void releaseAll() {
-
     releaseDirectInput();
 
-    if (fan)
-        fan->setSpeed(0);
+    //if (fan)
+    //    fan->setSpeed(0);
 
     RelinquishVJD(vjDev);
-
     irsdk_shutdown();
-
 }
